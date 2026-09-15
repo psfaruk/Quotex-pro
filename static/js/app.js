@@ -61,7 +61,8 @@
         state.micro[m.pair] = m.micro || {};
         if (m.pair === state.activePair) {
           state.secondsLeft = m.seconds_left;
-          // lightweight per-tick update: chart interpolates at 60fps internally
+          // per-tick update of the running candle: the chart price equals the
+          // actual Quotex tick (no smoothing) and redraws at display frame rate
           if (chart) chart.setRunning(m.candle, m.seconds_left);
           updateMicro(m.micro || {});
         }
@@ -69,6 +70,7 @@
       }
       case 'history': {
         state.candles[m.pair] = m.candles || [];
+        state.running[m.pair] = m.running || state.running[m.pair] || null;
         state.mini[m.pair] = (m.candles || []).slice(-14).map(c => Math.sign(c.close - c.open));
         if (m.pair === state.activePair) drawChart();
         break;
@@ -170,7 +172,8 @@
       minute: s.minute - 60, dir: s.direction, result: s.result,
     }));
     chart.setMarks(marks);
-    chart.setData(candles, running, state.secondsLeft, pend ? pend.entry : null);
+    chart.setData(candles, running, state.secondsLeft);
+    chart.setEntry(pend ? pend.entry : null);
   }
 
   function updateMicro(micro) {
@@ -193,7 +196,7 @@
     const pair = state.activePair;
     if (!pair) return;
     try {
-      const d = await api(`/api/candles/${encodeURIComponent(pair)}?limit=150`);
+      const d = await api(`/api/candles/${encodeURIComponent(pair)}?limit=200`);
       state.candles[pair] = d.candles || [];
       state.running[pair] = d.running;
       state.micro[pair] = d.micro || {};
@@ -258,7 +261,7 @@
     document.querySelectorAll('.tab').forEach(el => el.hidden = true);
     $(`tab-${name}`).hidden = false;
     document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === name));
-    if (name === 'signals') { if (chart) chart.resize(); loadCandles(); }
+    if (name === 'signals') loadCandles();   // ResizeObserver re-fits the chart on show
     if (name === 'history') loadHistory();
     if (name === 'stats') loadStats();
     if (name === 'settings') { Views.renderSettings(state); updateAuthBanner(); }
@@ -272,7 +275,6 @@
     loadCandles();
     if (state._tab !== 'signals') goTab('signals');
   }
-
   // ------------------------------------------------------------ settings
   function bindSettings() {
     const tok = $('set-token');
@@ -391,13 +393,12 @@
 
   // ------------------------------------------------------------ init
   function init() {
-    chart = new CandleChart($('chart-canvas'));
+    // TradingView Lightweight Charts (custom canvas chart removed entirely)
+    chart = new QXChart($('tvchart'));
     chart.onOhlc = (label) => { $('ohlc-panel').textContent = label; };
-    chart.start();   // 60fps render loop (idles when chart is off-screen)
     document.querySelectorAll('.tab-btn').forEach(b => b.onclick = () => goTab(b.dataset.tab));
 
-    // 60fps UI ticker: countdown text driven by wall-clock (server-synced),
-    // never drifts, updates every frame like a video
+    // countdown ticker driven by wall-clock (server-synced) — drift-free
     const uiLoop = () => {
       const s = chart ? chart.getSecondsLeft() : 60;
       const cd = $('countdown');

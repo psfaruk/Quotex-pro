@@ -64,6 +64,76 @@ class CandleEngine:
             now = time.time()
             self.running = Candle(minute=int(now // 60) * 60, pair=self.pair)
 
+    def seed_server_candles(self, rows: List) -> int:
+        """Merge server-computed M1 OHLC rows from history/list/v2.
+
+        Row format (newest-first as delivered by Quotex):
+            [minute, open, close, high, low, ticks, last_tick_ts]
+
+        Server rows are authoritative for their minutes — this is the exact
+        data the Quotex terminal chart draws, so seeding from it guarantees a
+        1:1 match with the broker chart. Rules:
+          * rows with minute < current minute  -> closed candles (merge/refresh
+            by minute; local micro tick-stats are preserved when we already
+            have that minute from live collection)
+          * row with minute == current minute  -> running candle (widen local
+            high/low, take server open/close/ticks)
+          * local candles NEWER than the batch are always kept (live-collected)
+        No close events fire from seeding, so no duplicate signals. Returns
+        the number of minutes whose data changed (0 = nothing new)."""
+        now_minute = int(time.time() // 60) * 60
+        incoming = {}
+        for r in rows:
+            try:
+                minute = int(r[0])
+                o, c, h, l = float(r[1]), float(r[2]), float(r[3]), float(r[4])
+                ticks = int(r[5]) if len(r) > 5 and r[5] else 0
+            except (ValueError, TypeError, IndexError):
+                continue
+            if minute > now_minute:
+                continue                      # clock-skew guard: never accept future
+            incoming[minute] = (o, h, l, c, ticks)
+        if not incoming:
+            return 0
+
+        local = {c.minute: c for c in self.candles}
+        changed = 0
+        for minute, (o, h, l, c, ticks) in incoming.items():
+            if minute == now_minute:
+                continue                      # handled below as running candle
+            lc = local.get(minute)
+            if lc is not None:
+                if (lc.open, lc.high, lc.low, lc.close) != (o, h, l, c):
+                    # refresh from authoritative server values, keep local micro stats
+                    lc.open, lc.high, lc.low, lc.close = o, h, l, c
+                    lc.ticks = max(lc.ticks, ticks)
+                    changed += 1
+            else:
+                nc = Candle(minute=minute, pair=self.pair,
+                            open=o, high=h, low=l, close=c, ticks=ticks)
+                nc.closed = True
+                local[minute] = nc
+                changed += 1
+        self.candles = [local[m] for m in sorted(local)][-self.MAX_HISTORY:]
+
+        # running candle row (current minute) — server may know more than us
+        run_row = incoming.get(now_minute)
+        if run_row is not None:
+            o, h, l, c, ticks = run_row
+            if self.running is None or self.running.minute != now_minute:
+                self.running = Candle(minute=now_minute, pair=self.pair,
+                                      open=o, high=h, low=l, close=c, ticks=ticks)
+            else:
+                run = self.running
+                run.open = o                       # server open beats our partial one
+                run.high = max(run.high, h)       # widen only — never shrink live H/L
+                run.low = min(run.low, l)
+                run.close = c                     # server close == latest tick
+                run.ticks = max(run.ticks, ticks)
+        elif self.running is None:
+            self.running = Candle(minute=now_minute, pair=self.pair)
+        return changed
+
     # ------------------------------------------------------------- info
     @property
     def seconds_left(self) -> int:

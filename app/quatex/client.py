@@ -14,7 +14,11 @@ Protocol (reverse-engineered & live-verified):
   Binary:  '451-["event",{"_placeholder":true,"num":0}]' then a BINARY frame:
            payload = b'\\x04' + JSON.
   Ticks:   quotes/stream -> [[pair, ts, price, flag], ...]
-  History: history/list/v2 -> {"asset":..,"period":60,"history":[[ts,price,flag],..]}
+  History: history/list/v2 -> {"asset":..,"period":60,
+             "history": [[ts,price,flag],..]            (last ~500s of ticks),
+             "candles": [[minute,open,close,high,low,ticks,last_ts],..]
+                      (SERVER-COMPUTED M1 OHLC, newest-first, ~198 candles —
+                       exactly what the Quotex terminal chart draws)}
 """
 import asyncio
 import json
@@ -53,7 +57,7 @@ class QuotexClient:
 
         # callbacks
         self.on_tick: Callable = None            # (pair, ts, price)
-        self.on_history: Callable = None         # (pair, history[[ts,price,flag]])
+        self.on_history: Callable = None         # (pair, payload dict: "history" ticks + "candles" server rows)
         self.on_status: Callable = None          # (dict)
         self.on_balance: Callable = None         # (dict)
 
@@ -87,17 +91,23 @@ class QuotexClient:
         if self.connected and self._ws:
             asyncio.create_task(self._follow_all())
 
-    async def request_history(self, pair: str) -> List:
-        """Request tick history for a pair (returns awaitable result)."""
+    async def request_history(self, pair: str) -> Dict:
+        """Request tick + candle history for a pair.
+
+        Returns the raw history/list/v2 payload dict:
+          {"asset", "period", "history": [[ts,price,flag],...],
+           "candles": [[minute,open,close,high,low,ticks,last_ts],...]}
+        The "candles" rows are server-computed M1 OHLC (newest first) — the
+        exact data the Quotex terminal draws on its own chart."""
         if not (self.connected and self._ws):
-            return []
+            return {}
         fut = asyncio.get_event_loop().create_future()
         self._history_waiters[pair] = fut
         try:
             await self._send(f'42["chart_notification/get",{{"asset":"{pair}","version":"1.0.0"}}]')
             return await asyncio.wait_for(fut, 12)
         except asyncio.TimeoutError:
-            return []
+            return {}
         finally:
             self._history_waiters.pop(pair, None)
 
@@ -264,11 +274,14 @@ class QuotexClient:
         elif ev == "history/list/v2" and isinstance(data, dict):
             pair = data.get("asset")
             hist = data.get("history") or []
+            server_candles = data.get("candles") or []
             fut = self._history_waiters.get(pair)
             if fut and not fut.done():
-                fut.set_result(hist)
-            if self.on_history and hist:
-                self.on_history(pair, hist)
+                fut.set_result(data)
+            if self.on_history and (hist or server_candles):
+                # full payload: engine prefers server "candles" (authoritative
+                # OHLC identical to the Quotex chart), falls back to ticks
+                self.on_history(pair, data)
         elif ev == "instruments/list" and isinstance(data, list):
             self.instruments = data
             for it in data:
@@ -373,27 +386,54 @@ class DemoFeed:
             self._drift.setdefault(p, 0.0)
             self._vol.setdefault(p, 0.00022)
 
-    async def request_history(self, pair: str) -> List:
-        """Generate ~9 minutes of backfill ticks."""
+    async def request_history(self, pair: str) -> Dict:
+        """Server-style payload: {'asset','period','history': ticks,
+        'candles': [[minute,open,close,high,low,ticks,last_ts],...] newest-first}.
+
+        Simulates ~110 minutes of coherent candle history ending at the price
+        the live simulator will continue from — mirrors the real Quotex
+        history/list/v2 shape so the chart opens fully populated in demo mode."""
         now = time.time()
-        start = now - 540
+        n_minutes = 110
+        t0 = now - n_minutes * 60
         price = self._prices.get(pair, self._default_price(pair))
-        self._prices[pair] = price
+        price *= (1 + random.gauss(0, 0.003))          # vary the starting point
         step = 1.0 / self.TICK_HZ
         hist = []
-        t = start
+        candles = []
         drift = 0.0
+        t = t0
+        minute = int(t0 // 60) * 60
+        o = h = l = c = price
+        ticks = 0
         while t < now:
+            if int(t // 60) * 60 != minute:
+                candles.append([minute, round(o, 5), round(c, 5),
+                                round(h, 5), round(l, 5), ticks, t])
+                minute = int(t // 60) * 60
+                o = h = l = c = price
+                ticks = 0
             if random.random() < 0.004:
                 drift = random.uniform(-3, 3) * 1e-5
             if random.random() < 0.01:
                 drift = -0.7 * drift
             price *= (1 + drift + random.gauss(0, 1.1e-4))
-            hist.append([round(t, 3), round(price, 5), random.randint(0, 1)])
+            h = max(h, price)
+            l = min(l, price)
+            c = price
+            ticks += 1
+            if t >= now - 540:
+                hist.append([round(t, 3), round(price, 5), random.randint(0, 1)])
             t += step
-        if self.on_history and hist:
-            self.on_history(pair, hist)
-        return hist
+        if ticks:
+            candles.append([minute, round(o, 5), round(c, 5),
+                            round(h, 5), round(l, 5), ticks, t])
+        candles.reverse()                               # newest first, like Quotex
+        self._prices[pair] = price                      # continue live from here
+        data = {"asset": pair, "period": 60, "history": hist, "candles": candles}
+        if self.on_history:
+            self.on_history(pair, data)
+        return data
 
     async def _run(self):
         while not self._stop.is_set():

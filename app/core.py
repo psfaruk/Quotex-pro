@@ -71,7 +71,9 @@ class AppCore:
             self._ensure_engine(p)
         self.feed.start()
         log.info("feed started: %s pairs=%s", self.feed_kind, pairs)
-        # request boot history (live feed) slightly after connect
+        # request boot history (live feed) slightly after connect; the server
+        # answers with ~198 server-computed candles per pair -> chart opens
+        # with full history that matches Quotex exactly
         if self.feed_kind == "live":
             async def boot():
                 await asyncio.sleep(6)
@@ -81,6 +83,15 @@ class AppCore:
                     except Exception as e:
                         log.warning("boot history %s failed: %s", p, e)
             asyncio.create_task(boot())
+        else:
+            async def boot_demo():
+                await asyncio.sleep(1)
+                for p in pairs:
+                    try:
+                        await self.feed.request_history(p)
+                    except Exception as e:
+                        log.warning("boot history %s failed: %s", p, e)
+            asyncio.create_task(boot_demo())
 
     async def apply_settings(self, **kw) -> Dict:
         old = dict(token=self.settings.token, is_demo=self.settings.is_demo,
@@ -154,24 +165,59 @@ class AppCore:
         asyncio.get_event_loop().create_task(
             self.signal_engine.on_candle_close(pair, closed, history))
 
-    def _on_history(self, pair: str, history: List):
+    def _on_history(self, pair: str, data):
+        """history/list/v2 payload arrived (server re-pushes on refresh).
+
+        The payload carries BOTH:
+          * "candles": server-computed M1 OHLC rows (~198 candles) — the exact
+            data the Quotex terminal draws. Preferred: guaranteed 1:1 match
+            with the broker chart + instant full history on chart open.
+          * "history": raw ticks (~500s) — legacy fallback when the server
+            variant sends no candle rows (aggregated locally instead)."""
         eng = self.engines.get(pair)
-        if eng is None or not history:
+        if eng is None or not isinstance(data, dict):
             return
-        # seed only once per boot — re-seeding would wipe live-collected candles
-        # and duplicate signals (server re-pushes history on session refresh)
-        if len(eng.candles) >= 3:
-            return
-        try:
-            eng.seed_history(history)
+        rows = data.get("candles") or []
+        ticks = data.get("history") or []
+        changed = 0
+        if rows:
+            try:
+                changed = eng.seed_server_candles(rows)
+            except Exception as e:
+                log.warning("server-candle seed %s failed: %s", pair, e)
+            if changed:
+                # persist authoritative history immediately (backtest + instant
+                # pair-switch restore from DB on next boot)
+                asyncio.get_event_loop().create_task(self._persist_engine_candles(pair, eng))
+        elif ticks and len(eng.candles) < 3:
+            # legacy fallback: build ~8 candles locally from raw ticks
+            try:
+                eng.seed_history(ticks)
+                changed = 1
+            except Exception as e:
+                log.warning("tick seed %s failed: %s", pair, e)
+        if changed:
             self.hub.broadcast_nowait({
                 "type": "history", "pair": pair,
-                "candles": [c.to_dict() for c in eng.candles[-120:]],
+                "candles": [c.to_dict() for c in eng.candles[-200:]],
+                "running": eng.running.to_dict() if eng.running else None,
+                "seconds_left": eng.seconds_left,
             })
             asyncio.get_event_loop().create_task(self._broadcast_status())
-            log.info("seeded %s with %d ticks -> %d candles", pair, len(history), len(eng.candles))
+            log.info("merged %d server candles for %s (engine now holds %d)",
+                     changed, pair, len(eng.candles))
+
+    async def _persist_engine_candles(self, pair: str, eng):
+        """Persist the engine's closed candles to SQLite (REPLACE by minute)."""
+        try:
+            rows = [(
+                c.pair, c.minute, c.open, c.high, c.low, c.close,
+                c.ticks, c.up_ticks, c.down_ticks, c.last10_up, c.last10_down,
+            ) for c in eng.candles[-200:]]
+            if rows:
+                await db.save_candles(rows)
         except Exception as e:
-            log.warning("seed %s failed: %s", pair, e)
+            log.warning("persist candles %s failed: %s", pair, e)
 
     def _on_feed_status(self, status: Dict):
         self.feed_status = status
