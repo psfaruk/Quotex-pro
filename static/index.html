@@ -187,14 +187,17 @@
     <section class="tab" id="tab-settings" hidden>
       <div class="panel">
         <div class="panel-head"><h3>🔑 Quotex কানেকশন</h3></div>
+        <div id="auth-banner" class="auth-banner" hidden></div>
         <div class="form">
           <label class="fld">
             <span>QX টোকেন (SSID)</span>
             <div class="token-row">
-              <input type="password" id="set-token" placeholder="ssid কুকি থেকে টোকেন পেষ্ট করুন" autocomplete="off">
-              <button class="btn small" id="token-show">দেখাও</button>
+              <input type="password" id="set-token" placeholder="ssid কুকি থেকে টোকেন পেষ্ট করুন" autocomplete="off" spellcheck="false">
+              <button class="btn small" id="token-paste" type="button" title="ক্লিপবোর্ড থেকে পেষ্ট">📋 পেষ্ট</button>
+              <button class="btn small" id="token-show" type="button">দেখাও</button>
             </div>
-            <span class="help">ব্রাউজারে qxbroker.com লগইন → F12 → Application → Cookies → <b>ssid</b> এর ভ্যালু কপি করুন। টোকেন সার্ভারে সেভ হয়, কারও সাথে শেয়ার করবেন না।</span>
+            <span class="help">ব্রাউজারে qxbroker.com লগইন → F12 → Application → Cookies → <b>ssid</b> এর ভ্যালু কপি করুন। 📋 পেষ্ট বাটনে চাপলে এক ক্লিকেই বসে যাবে। টোকেন সার্ভারে সেভ হয়, কারও সাথে শেয়ার করবেন না।</span>
+            <span class="help warn">⚠ SSID টোকেন <b>কিছুক্ষণ পর expire হয়ে যায়</b> — Quotex থেকে লগআউট/নতুন লগইন হলে পুরনো টোকেন মরে যায়। ডেটা না এলে আবার নতুন ssid কপি করে পেষ্ট করুন।</span>
           </label>
 
           <label class="fld">

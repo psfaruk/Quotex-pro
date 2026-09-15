@@ -199,6 +199,7 @@ class AppCore:
             "broker": st.get("broker", ""),
             "mode": st.get("mode", ""),
             "error": st.get("error", ""),
+            "auth_error": st.get("auth_error", ""),
             "balance": st.get("balance", {}),
             "payouts": st.get("payouts", {}),
             "pairs": pairs_info,

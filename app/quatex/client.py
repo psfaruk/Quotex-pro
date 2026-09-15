@@ -63,6 +63,9 @@ class QuotexClient:
         self._last_event = "?"
         self._followed = False
         self._history_waiters: Dict[str, asyncio.Future] = {}
+        # auth failure state: set when server explicitly rejects the token
+        self.auth_error: str = ""          # "TOKEN_REJECTED" | "" (machine-readable)
+        self._reject_count = 0
 
     # ---------------------------------------------------------------- public
     def start(self):
@@ -109,10 +112,19 @@ class QuotexClient:
                 log.warning("quotex session ended: %s", e)
                 self.connected = False
                 self.authenticated = False
-                self._emit_status(error=str(e))
-            await asyncio.sleep(min(30, 3 + random.random() * 4))
+                # keep auth_error sticky so the UI keeps explaining WHY
+                self._emit_status(error=self.auth_error or str(e))
+            # rejected token will not heal by hammering the server:
+            # back off hard (60s + jitter). A NEW token triggers apply_settings
+            # which stops this task and starts a fresh client immediately.
+            if self.auth_error == "TOKEN_REJECTED":
+                await asyncio.sleep(60 + random.random() * 15)
+            else:
+                await asyncio.sleep(min(30, 3 + random.random() * 4))
 
     async def _session(self):
+        # per-session reset: previous reject is re-tested with this attempt
+        self.auth_error = ""
         connect = websockets.connect(URL, additional_headers=HEADERS,
                                      ping_interval=None, ping_timeout=None)
         try:
@@ -138,7 +150,9 @@ class QuotexClient:
                 await self._ws.close()
             except Exception:
                 pass
-            self._emit_status()
+            # after a reject the server closes the socket right away —
+            # keep the auth_error visible so the UI can explain it
+            self._emit_status(error=self.auth_error)
 
     async def _pinger(self):
         while True:
@@ -214,6 +228,21 @@ class QuotexClient:
                     await self._send('451-["instruments/list",{"_placeholder":true,"num":0}]')
                     if not self._followed:
                         await self._follow_all()
+                elif ev in ("authorization/reject", "authorization-fail", "s_authorization/reject"):
+                    # server explicitly refused our session token (expired / invalid /
+                    # logged-out elsewhere). Surface it loudly instead of silent retry.
+                    self.auth_error = "TOKEN_REJECTED"
+                    self._reject_count += 1
+                    log.warning("quotex authorization REJECTED (token expired/invalid, attempt %d)",
+                                self._reject_count)
+                    self._emit_status(error="TOKEN_REJECTED")
+                elif ev == "successauth":
+                    self.authenticated = True
+                    self._emit_status()
+            if raw == "41":
+                # namespace disconnect — usually follows a reject; read_loop will end
+                # on the socket close right after
+                continue
 
     async def _handle_binary(self, payload: bytes):
         if payload[:1] == b"\x04":
@@ -268,6 +297,7 @@ class QuotexClient:
             self.on_status({
                 "feed": "live", "connected": self.connected,
                 "authenticated": self.authenticated, "error": error,
+                "auth_error": self.auth_error,
                 "balance": self.balance, "payouts": self.payouts,
                 "broker": "Quotex", "mode": "demo" if self.is_demo else "real",
             })

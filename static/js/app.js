@@ -49,7 +49,11 @@
         updateConnBadge();
         Views.renderPairTabs(state);
         Views.renderHome(state);
-        if (state._tab === 'settings') Views.renderSettings(state);
+        // NOTE: we deliberately do NOT re-render the settings form here.
+        // A full re-render every few seconds used to wipe the token input /
+        // dropdown / slider while the user was editing (felt like "can't paste").
+        // Only the passive auth banner is refreshed.
+        if (state._tab === 'settings') updateAuthBanner();
         break;
       }
       case 'candle_update': {
@@ -115,12 +119,42 @@
     } else if (st.feed === 'demo') {
       dot.className = 'dot dot-demo';
       txt.textContent = 'ডেমো ফিড (টোকেন নেই)';
+    } else if (st.auth_error === 'TOKEN_REJECTED') {
+      dot.className = 'dot dot-off';
+      txt.textContent = '❌ টোকেন প্রত্যাখ্যাত (expired) — নতুন SSID নিন';
     } else if (st.connected) {
       dot.className = 'dot dot-demo';
       txt.textContent = 'অথেন্টিকেট হচ্ছে…';
     } else {
       dot.className = 'dot dot-off';
       txt.textContent = 'ডিসকানেক্টেড — রিকানেক্ট হচ্ছে';
+    }
+  }
+
+  // passive auth banner inside Settings tab (never touches form inputs)
+  function updateAuthBanner() {
+    const el = $('auth-banner');
+    if (!el) return;
+    el.hidden = false;  // [hidden]{display:none!important} would hide it otherwise
+    const st = state.status || {};
+    if (st.feed === 'demo') {
+      el.className = 'auth-banner warn show';
+      el.innerHTML = '⚠ <b>ডেমো ফিড চলছে</b> — লাইভ ডেটার জন্য qxbroker.com থেকে ssid টোকেন কপি করে উপরে পেষ্ট করে সেভ করুন।';
+    } else if (st.auth_error === 'TOKEN_REJECTED') {
+      el.className = 'auth-banner err show';
+      el.innerHTML = '❌ <b>টোকেন প্রত্যাখ্যাত — SSID টোকেনটি expire হয়ে গেছে বা ভুল।</b><br>' +
+        'Quotex SSID টোকেন সেশন-বাউন্ড: লগআউট, নতুন লগইন বা কিছুক্ষণ অপেক্ষায় এটি মরে যায়।<br>' +
+        '👉 <b>qxbroker.com এ লগইন থাকুন → F12 → Application → Cookies → ssid কপি করে এখানে পেষ্ট করুন → সেভ ও কানেক্ট</b>';
+    } else if (st.feed === 'live' && st.connected && st.authenticated) {
+      const bal = st.balance ? (st.mode === 'real' ? st.balance.liveBalance : st.balance.demoBalance) : null;
+      el.className = 'auth-banner ok show';
+      el.innerHTML = `✓ <b>লাইভ কানেক্টেড</b> — ${st.broker || 'Quotex'} · ${st.mode === 'real' ? 'রিয়েল' : 'ডেমো'}${bal != null ? ` · ব্যালেন্স ${Number(bal).toLocaleString()}` : ''}`;
+    } else if (st.feed === 'live') {
+      el.className = 'auth-banner warn show';
+      el.innerHTML = '⏳ <b>কানেক্ট হচ্ছে…</b> — টোকেন যাচাই করা হচ্ছে, কয়েক সেকেন্ড লাগতে পারে।';
+    } else {
+      el.className = 'auth-banner warn show';
+      el.innerHTML = '⏳ ফিড শুরু হচ্ছে…';
     }
   }
 
@@ -229,7 +263,7 @@
     if (name === 'signals') { if (chart) chart.resize(); loadCandles(); }
     if (name === 'history') loadHistory();
     if (name === 'stats') loadStats();
-    if (name === 'settings') Views.renderSettings(state);
+    if (name === 'settings') { Views.renderSettings(state); updateAuthBanner(); }
   }
   window.App = { goTab, selectPair };
 
@@ -243,7 +277,31 @@
   // ------------------------------------------------------------ settings
   function bindSettings() {
     const tok = $('set-token');
-    tok.addEventListener('input', () => { state._tokenEdited = true; });
+    const markEdited = () => { state._tokenEdited = true; };
+    // input covers typing AND paste (both fire 'input'), but be extra safe:
+    tok.addEventListener('input', markEdited);
+    tok.addEventListener('paste', markEdited);
+    tok.addEventListener('change', markEdited);
+
+    // one-tap clipboard paste (works even where long-press paste is flaky)
+    $('token-paste').onclick = async () => {
+      const msg = $('save-msg');
+      try {
+        if (!navigator.clipboard || !navigator.clipboard.readText) {
+          throw new Error('এই ব্রাউজারে ক্লিপবোর্ড সাপোর্ট নেই — ফিল্ডে লং-প্রেস করে Paste ব্যবহার করুন');
+        }
+        const text = (await navigator.clipboard.readText()).trim();
+        if (!text) throw new Error('ক্লিপবোর্ড খালি — আগে ssid টোকেন কপি করুন');
+        tok.value = text;
+        markEdited();
+        msg.style.color = 'var(--green)';
+        msg.textContent = '✓ টোকেন পেষ্ট হয়েছে — এখন "সেভ ও কানেক্ট" চাপুন';
+      } catch (e) {
+        msg.style.color = 'var(--red)';
+        msg.textContent = '✗ পেষ্ট ব্যর্থ: ' + (e.message || e);
+      }
+    };
+
     $('token-show').onclick = () => {
       tok.type = tok.type === 'password' ? 'text' : 'password';
     };
@@ -269,14 +327,43 @@
         state.settingsMasked = d;
         state._tokenEdited = false;
         Views.renderSettings(state);
+        updateAuthBanner();
         msg.style.color = 'var(--green)';
         msg.textContent = '✓ সেভ হয়েছে — কানেক্ট হচ্ছে…';
-        setTimeout(loadStatusOnce, 2500);
+        // follow the connection attempt and report the real outcome
+        watchConnectionOutcome(msg);
       } catch (e) {
         msg.style.color = 'var(--red)';
         msg.textContent = '✗ সেভ ব্যর্থ: ' + e.message;
       }
     };
+
+    // poll status ~20s and translate the outcome for the user
+    function watchConnectionOutcome(msg) {
+      const t0 = Date.now();
+      if (state._connWatch) clearInterval(state._connWatch);
+      state._connWatch = setInterval(async () => {
+        try {
+          const st = await api('/api/status');
+          state.status = Object.assign({}, state.status, st);
+          updateConnBadge();
+          updateAuthBanner();
+          if (st.auth_error === 'TOKEN_REJECTED') {
+            msg.style.color = 'var(--red)';
+            msg.textContent = '✗ টোকেন প্রত্যাখ্যাত — টোকেন expired/ভুল। নতুন ssid কপি করে আবার পেষ্ট করুন।';
+            clearInterval(state._connWatch);
+          } else if (st.feed === 'live' && st.connected && st.authenticated) {
+            msg.style.color = 'var(--green)';
+            msg.textContent = '✓ লাইভ কানেক্টেড — টিক ডেটা আসছে!';
+            clearInterval(state._connWatch);
+          } else if (Date.now() - t0 > 20000) {
+            msg.style.color = 'var(--accent)';
+            msg.textContent = 'এখনো কানেক্ট হচ্ছে… কয়েক মিনিট পর আবার দেখুন (ব্যানারে স্ট্যাটাস দেখাবে)।';
+            clearInterval(state._connWatch);
+          }
+        } catch (e) { /* transient — keep trying until timeout */ }
+      }, 2000);
+    }
 
     // history filters
     ['hist-window', 'hist-pair', 'hist-dir', 'hist-result'].forEach(id => {
