@@ -1,0 +1,9 @@
+data/
+__pycache__/
+*.pyc
+.env
+nohup.out
+*.log
+*.db
+.DS_Store
+__MACOSX/

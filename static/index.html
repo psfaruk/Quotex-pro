@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="bn">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>QX Signal Pro — ক্যান্ডেল রিয়েকশন সিগন্যাল</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Hind+Siliguri:wght@400;500;600;700&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+<div id="app">
+
+  <!-- ======================= HEADER ======================= -->
+  <header class="header">
+    <div class="brand">
+      <div class="logo">QX</div>
+      <div>
+        <div class="brand-name">Signal Pro</div>
+        <div class="brand-sub">ক্যান্ডেল রিয়েকশন ইঞ্জিন</div>
+      </div>
+    </div>
+    <div class="conn" id="conn-badge">
+      <span class="dot dot-off" id="conn-dot"></span>
+      <span id="conn-text">কানেক্টিং…</span>
+    </div>
+  </header>
+
+  <!-- ======================= MAIN ======================= -->
+  <main id="main">
+
+    <!-- ============ HOME ============ -->
+    <section class="tab" id="tab-home">
+      <div class="cards-row" id="home-kpis">
+        <div class="kpi"><div class="kpi-label">মোট সিগন্যাল (১ ঘন্টা)</div><div class="kpi-value" id="kpi-total">—</div></div>
+        <div class="kpi"><div class="kpi-label">উইন রেট</div><div class="kpi-value accent" id="kpi-winrate">—</div></div>
+        <div class="kpi"><div class="kpi-label">ব্যালেন্স</div><div class="kpi-value" id="kpi-balance">—</div></div>
+        <div class="kpi"><div class="kpi-label">ফিড</div><div class="kpi-value" id="kpi-feed">—</div></div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head">
+          <h3>🔴 লাইভ পেয়ার</h3>
+          <span class="hint">প্রতিটি পেয়ারের চলমান ক্যান্ডেল + শেষ সিগন্যাল</span>
+        </div>
+        <div class="pair-grid" id="home-pairs"></div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head"><h3>⚡ চলমান সিগন্যাল</h3></div>
+        <div id="home-pending" class="pending-wrap"></div>
+      </div>
+
+      <div class="panel guide">
+        <div class="panel-head"><h3>📖 ক্যান্ডেল রিয়েকশন — দ্রুত গাইড</h3></div>
+        <div class="guide-body">
+          <div class="guide-item"><b>বডি স্ট্রেংথ:</b> বডি ≥ রেঞ্জের ৭০% হলে দিকে ভরসা বেশি; ৩০% এর কম হলে রঙে ভরসা করবেন না।</div>
+          <div class="guide-item"><b>উইক রিজেকশন:</b> লম্বা নিচের উইক = বাই রিজেকশন, লম্বা উপরের উইক = সেল রিজেকশন — লেভেলের কাছে হলে ওজন বেশি।</div>
+          <div class="guide-item"><b>লাস্ট ১০ সেকেন্ড:</b> সবচেয়ে নয়েজি জানালা — একা কনফার্মেশন না; বাকি ফ্যাক্টরের সাথে মিললে তবেই দামি।</div>
+          <div class="guide-item"><b>কালার ফ্লিপ:</b> ৫৮ সেকেন্ড রেড → শেষ ২ সেকেন্ডে গ্রিন = weak body + last-second ফ্লো। অ্যাপ এটা ডিটেক্ট করে ⚠ ফ্লিপ-রিস্ক দেখায়।</div>
+          <div class="guide-item"><b>কনফার্মেশন স্ট্যাক:</b> লেভেল + মার্কেট স্ট্রাকচার + ফুল ক্লোজ + টিক মোমেন্টাম = আসল কনফার্মেশন। কনফ্লুয়েন্স কম হলে NO SIGNAL।</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ SIGNALS ============ -->
+    <section class="tab" id="tab-signals" hidden>
+      <div class="panel chart-panel">
+        <div class="chart-top">
+          <div class="pair-tabs" id="pair-tabs"></div>
+          <div class="ohlc" id="ohlc-panel">O — H — L — C —</div>
+        </div>
+        <div class="chart-wrap">
+          <canvas id="chart-canvas"></canvas>
+          <div class="countdown" id="countdown">--</div>
+        </div>
+        <div class="micro-bar">
+          <span class="micro-label">শেষ ১০ সেকেন্ড বায়াস</span>
+          <div class="meter"><div class="meter-fill" id="micro-fill"></div><div class="meter-zero"></div></div>
+          <span class="micro-val" id="micro-val">0%</span>
+          <span class="flip-badge" id="flip-badge" hidden>⚠ ফ্লিপ রিস্ক</span>
+        </div>
+      </div>
+
+      <div class="signals-row">
+        <div class="panel signal-live">
+          <div class="panel-head"><h3>🎯 নতুন সিগন্যাল (ক্যান্ডেল ক্লোজে)</h3></div>
+          <div id="live-signal" class="live-signal"></div>
+        </div>
+        <div class="panel factor-panel">
+          <div class="panel-head"><h3>🧠 ফ্যাক্টর ব্রেকডাউন</h3></div>
+          <div id="factor-list" class="factor-list">
+            <div class="empty">ক্যান্ডেল ক্লোজ হলে এখানে ৮-ফ্যাক্টর স্কোরিং দেখা যাবে…</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head"><h3>📡 সিগন্যাল ফিড</h3></div>
+        <div id="signal-feed" class="feed-list"></div>
+      </div>
+    </section>
+
+    <!-- ============ HISTORY ============ -->
+    <section class="tab" id="tab-history" hidden>
+      <div class="panel">
+        <div class="panel-head wrap">
+          <h3>🕐 সিগন্যাল হিস্টোরি</h3>
+          <div class="filters">
+            <select id="hist-window">
+              <option value="1h" selected>লাস্ট ১ ঘন্টা</option>
+              <option value="3h">৩ ঘন্টা</option>
+              <option value="6h">৬ ঘন্টা</option>
+              <option value="24h">২৪ ঘন্টা</option>
+              <option value="all">সব</option>
+            </select>
+            <select id="hist-pair"><option value="">সব পেয়ার</option></select>
+            <select id="hist-dir">
+              <option value="">CALL + PUT</option>
+              <option value="CALL">শুধু CALL</option>
+              <option value="PUT">শুধু PUT</option>
+            </select>
+            <select id="hist-result">
+              <option value="">সব রেজাল্ট</option>
+              <option value="WIN">শুধু WIN</option>
+              <option value="LOSS">শুধু LOSS</option>
+            </select>
+          </div>
+        </div>
+        <div class="hist-summary" id="hist-summary"></div>
+        <div class="table-wrap">
+          <table class="tbl" id="hist-table">
+            <thead>
+              <tr><th>সময়</th><th>পেয়ার</th><th>দিক</th><th>কনফিডেন্স</th><th>এন্ট্রি</th><th>ক্লোজ</th><th>রেজাল্ট</th></tr>
+            </thead>
+            <tbody id="hist-body"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ STATS ============ -->
+    <section class="tab" id="tab-stats" hidden>
+      <div class="panel">
+        <div class="panel-head wrap">
+          <h3>📊 উইন রেট স্ট্যাটিসটিক্স</h3>
+          <div class="filters">
+            <select id="stats-window">
+              <option value="1h" selected>১ ঘন্টা</option>
+              <option value="3h">৩ ঘন্টা</option>
+              <option value="6h">৬ ঘন্টা</option>
+              <option value="24h">২৪ ঘন্টা</option>
+              <option value="all">সব সময়</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="cards-row" id="stats-kpis"></div>
+
+        <h4 class="sub-h">প্রতি পেয়ার (CALL/PUT আলাদা উইন রেট)</h4>
+        <div class="table-wrap">
+          <table class="tbl" id="pair-stats">
+            <thead><tr><th>পেয়ার</th><th>সিগন্যাল</th><th>উইন</th><th>লস</th><th>উইন রেট</th><th>CALL রেট</th><th>PUT রেট</th></tr></thead>
+            <tbody id="pair-stats-body"></tbody>
+          </table>
+        </div>
+
+        <h4 class="sub-h">কনফিডেন্স টিয়ার অনুযায়ী (এজ ভেরিফিকেশন)</h4>
+        <div class="tier-cards" id="tier-cards"></div>
+
+        <h4 class="sub-h">CALL vs PUT</h4>
+        <div class="dir-bars" id="dir-bars"></div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head wrap">
+          <h3>🧪 ব্যাকটেস্ট (কালেক্ট করা রিয়েল ডেটায়)</h3>
+          <button class="btn" id="bt-run">ব্যাকটেস্ট চালাও</button>
+        </div>
+        <div id="bt-result" class="bt-result">
+          <div class="empty">সার্ভারে যত ক্যান্ডেল জমে থাকবে (লাইভ ফিড থেকে), তত ক্যান্ডেলে ইঞ্জিন রিপ্লে হবে। অ্যাপ চালু থাকলে ডেটা নিজে নিজে জমে।</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ SETTINGS ============ -->
+    <section class="tab" id="tab-settings" hidden>
+      <div class="panel">
+        <div class="panel-head"><h3>🔑 Quotex কানেকশন</h3></div>
+        <div class="form">
+          <label class="fld">
+            <span>QX টোকেন (SSID)</span>
+            <div class="token-row">
+              <input type="password" id="set-token" placeholder="ssid কুকি থেকে টোকেন পেষ্ট করুন" autocomplete="off">
+              <button class="btn small" id="token-show">দেখাও</button>
+            </div>
+            <span class="help">ব্রাউজারে qxbroker.com লগইন → F12 → Application → Cookies → <b>ssid</b> এর ভ্যালু কপি করুন। টোকেন সার্ভারে সেভ হয়, কারও সাথে শেয়ার করবেন না।</span>
+          </label>
+
+          <label class="fld">
+            <span>একাউন্ট</span>
+            <select id="set-demo">
+              <option value="1">ডেমো</option>
+              <option value="0">রিয়েল</option>
+            </select>
+            <span class="help">ডেটা/সিগন্যাল উভয় মোডে একই; নিজের ট্রেড আপনি করেন।</span>
+          </label>
+
+          <label class="fld">
+            <span>সিগন্যাল মিনিমাম কনফিডেন্স: <b id="conf-val">55</b>%</span>
+            <input type="range" id="set-conf" min="50" max="90" value="55">
+            <span class="help">বেশি কনফিডেন্স = কম কিন্তু মানের সিগন্যাল।</span>
+          </label>
+
+          <label class="fld">
+            <span>পেয়ার সিলেকশন</span>
+            <div class="pair-checks" id="set-pairs"></div>
+          </label>
+
+          <button class="btn primary" id="set-save">সেভ ও কানেক্ট</button>
+          <span class="save-msg" id="save-msg"></span>
+        </div>
+      </div>
+
+      <div class="panel risk">
+        <div class="panel-head"><h3>⚠️ ঝুঁকির কথা</h3></div>
+        <p>বাইনারি অপশন অত্যন্ত ঝুঁকিপূর্ণ। এই অ্যাপ টেকনিক্যাল ক্যান্ডেল-রিয়েকশন অ্যানালাইসিস দেয় — <b>কোনো সিস্টেমই নেক্সট ক্যান্ডেল ১০০% বলতে পারে না।</b> যে টাকা হারালে ক্ষতি হবে না, শুধু সেটা দিয়ে টেস্ট করুন। উইন-রেট নিজে যাচাই করে নিন (Stats ট্যাব)।</p>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- ======================= TAB BAR ======================= -->
+  <nav class="tabbar">
+    <button class="tab-btn active" data-tab="home"><span>🏠</span>হোম</button>
+    <button class="tab-btn" data-tab="signals"><span>📈</span>সিগন্যাল</button>
+    <button class="tab-btn" data-tab="history"><span>🕐</span>হিস্টোরি</button>
+    <button class="tab-btn" data-tab="stats"><span>📊</span>স্ট্যাটস</button>
+    <button class="tab-btn" data-tab="settings"><span>⚙️</span>সেটিং</button>
+  </nav>
+</div>
+
+<script src="/static/js/chart.js"></script>
+<script src="/static/js/views.js"></script>
+<script src="/static/js/app.js"></script>
+</body>
+</html>
