@@ -101,6 +101,13 @@ body{
 .pair-tab{background:var(--panel2);border:1px solid var(--line);color:var(--dim);border-radius:8px;padding:5px 11px;font-size:12.5px;font-weight:600;font-family:'Inter',sans-serif;cursor:pointer}
 .pair-tab.active{color:#04121a;background:var(--green);border-color:var(--green)}
 .ohlc{font-size:11.5px;color:var(--dim);font-family:'Inter',monospace}
+.chart-meta{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.tick-badge{font-size:10.5px;font-weight:700;font-family:'Inter',monospace;padding:2px 8px;border-radius:6px;border:1px solid var(--line);background:var(--panel2);white-space:nowrap}
+.tick-badge.ok{color:var(--green);border-color:var(--green);background:rgba(0,200,150,.12)}
+.tick-badge.mid{color:var(--accent);border-color:var(--accent);background:rgba(255,176,32,.10)}
+.tick-badge.low{color:var(--red);border-color:rgba(255,91,110,.5);background:rgba(255,91,110,.08)}
+.lat-badge{font-size:10.5px;font-weight:600;font-family:'Inter',monospace;color:var(--dim);padding:2px 8px;border-radius:6px;border:1px solid var(--line);background:var(--panel2);white-space:nowrap}
+.pc-price{transition:color .15s}
 .chart-wrap{position:relative;background:var(--bg);border-radius:10px;border:1px solid var(--line);height:340px}
 #tvchart{width:100%;height:100%;position:absolute;inset:0;cursor:crosshair;touch-action:none}
 .countdown{position:absolute;top:8px;right:10px;z-index:5;pointer-events:none;font-family:'Inter',monospace;font-size:13px;font-weight:700;color:var(--accent);background:rgba(11,15,23,.85);padding:3px 9px;border-radius:7px;border:1px solid var(--line)}

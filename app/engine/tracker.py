@@ -35,7 +35,7 @@ class Tracker:
         sig.result = result
         sig.settled_at = time.time()
         await db.settle_signal(sig.id, closed.close, result, sig.settled_at)
-        await self.hub.broadcast({
+        self.hub.broadcast({
             "type": "result", "pair": pair, "signal": sig.to_dict(),
             "candle": closed.to_dict(),
         })

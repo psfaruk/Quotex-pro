@@ -41,7 +41,7 @@ class SignalEngine:
                 entry=closed.close, factors=factors, created_at=time.time(),
             )
             sig.id = await self.tracker.open(sig)
-            await self.hub.broadcast({
+            self.hub.broadcast({
                 **result, "signal": sig.to_dict(),
             })
             log.info("SIGNAL %s %s conf=%d score=%.0f", pair, direction, conf, score)
@@ -50,4 +50,4 @@ class SignalEngine:
             result["reason"] = ("কনফ্লুয়েন্স অপর্যাপ্ত — NO SIGNAL"
                                 if abs(score) < threshold else
                                 f"কনফিডেন্স {conf} < {min_conf} — ফিল্টার্ড")
-            await self.hub.broadcast(result)
+            self.hub.broadcast(result)

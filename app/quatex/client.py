@@ -390,14 +390,17 @@ class DemoFeed:
         """Server-style payload: {'asset','period','history': ticks,
         'candles': [[minute,open,close,high,low,ticks,last_ts],...] newest-first}.
 
-        Simulates ~110 minutes of coherent candle history ending at the price
-        the live simulator will continue from — mirrors the real Quotex
-        history/list/v2 shape so the chart opens fully populated in demo mode."""
+        Simulates ~110 minutes of coherent candle history ending EXACTLY at
+        the current live simulator price — the walk is generated, then
+        rescaled so its final tick equals the live price. That means repeated
+        refreshes (pair switches) never teleport the chart: history always
+        hands off seamlessly to the live tick stream, mirroring how the real
+        Quotex history/list/v2 payload agrees with quotes/stream."""
         now = time.time()
         n_minutes = 110
         t0 = now - n_minutes * 60
-        price = self._prices.get(pair, self._default_price(pair))
-        price *= (1 + random.gauss(0, 0.003))          # vary the starting point
+        anchor = self._prices.get(pair, self._default_price(pair))   # live price NOW
+        price = anchor * (1 + random.gauss(0, 0.003))                # walk start varies
         step = 1.0 / self.TICK_HZ
         hist = []
         candles = []
@@ -428,8 +431,14 @@ class DemoFeed:
         if ticks:
             candles.append([minute, round(o, 5), round(c, 5),
                             round(h, 5), round(l, 5), ticks, t])
+        # rescale the whole walk so it ends exactly at the live anchor price —
+        # no teleport on refresh, chart continues seamlessly into live ticks
+        scale = anchor / c if c else 1.0
+        if abs(scale - 1.0) > 1e-9:
+            candles = [[m, o_ * scale, c_ * scale, h_ * scale, l_ * scale, n, ts]
+                       for (m, o_, c_, h_, l_, n, ts) in candles]
+            hist = [[ts, p * scale, fl] for (ts, p, fl) in hist]
         candles.reverse()                               # newest first, like Quotex
-        self._prices[pair] = price                      # continue live from here
         data = {"asset": pair, "period": 60, "history": hist, "candles": candles}
         if self.on_history:
             self.on_history(pair, data)

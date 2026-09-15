@@ -2,6 +2,7 @@
 import asyncio
 import logging
 import time
+from collections import deque
 from typing import Dict, List, Optional
 
 from .config import Settings, KNOWN_PAIRS
@@ -28,6 +29,10 @@ class AppCore:
         self.feed_status: Dict = {}
         self.price: Dict[str, float] = {}
         self._persist_task = None
+        # tick-rate telemetry: per-pair timestamp log (rolling ~15s window)
+        self._ticklog: Dict[str, deque] = {}
+        self._tps_cache: Dict[str, float] = {}          # pair -> cached t/s
+        self._tps_at: Dict[str, float] = {}             # pair -> last compute time
 
     # ------------------------------------------------------------ lifecycle
     async def start(self):
@@ -136,22 +141,44 @@ class AppCore:
         if eng is None:
             return
         self.price[pair] = price
+        log_ = self._ticklog.get(pair)
+        if log_ is None:
+            log_ = self._ticklog[pair] = deque(maxlen=200)
+        log_.append(ts if ts > 1e9 else time.time())
         eng.add_tick(price, ts)
 
-    def _on_candle_update(self, pair: str, candle, seconds_left: float):
-        # near-real-time: forward every tick to browsers (Quotex delivers
-        # ~7-12 ticks/sec per pair). 40ms floor only guards against micro-bursts
-        # so the browser sees a smooth ~10-25 updates/sec per pair.
+    def _tps(self, pair: str) -> float:
+        """Rolling ticks-per-second over the last ~8s (recomputed at 2Hz max)."""
         now = time.time()
-        last = getattr(self, "_last_upd", {}).get(pair, 0.0)
-        if now - last < 0.04:
-            return
-        getattr(self, "_last_upd", {})[pair] = now
+        if now - self._tps_at.get(pair, 0.0) < 0.5:
+            return self._tps_cache.get(pair, 0.0)
+        self._tps_at[pair] = now
+        log_ = self._ticklog.get(pair)
+        if not log_:
+            self._tps_cache[pair] = 0.0
+            return 0.0
+        cutoff = now - 8.0
+        n = 0
+        for t in reversed(log_):
+            if t >= cutoff:
+                n += 1
+            else:
+                break
+        self._tps_cache[pair] = round(n / 8.0, 1)
+        return self._tps_cache[pair]
+
+    def _on_candle_update(self, pair: str, candle, seconds_left: float):
+        # EVERY tick is forwarded — no throttle. Quotex delivers ~8-12
+        # ticks/sec per pair and the browser applies each one instantly
+        # (sub-millisecond hop from socket to series.update()).
         self.hub.broadcast_nowait({
             "type": "candle_update", "pair": pair,
-            "candle": candle.to_dict(), "seconds_left": round(max(0.0, seconds_left), 2),
+            "candle": candle.to_dict() if candle.ticks > 0 else None,
+            "seconds_left": round(max(0.0, seconds_left), 2),
             "price": self.price.get(pair),
             "micro": self.engines[pair].micro_snapshot(),
+            "tps": self._tps(pair),
+            "ts": round(time.time(), 3),
         })
 
     def _on_candle_close(self, pair: str, closed, history):
@@ -200,12 +227,31 @@ class AppCore:
             self.hub.broadcast_nowait({
                 "type": "history", "pair": pair,
                 "candles": [c.to_dict() for c in eng.candles[-200:]],
-                "running": eng.running.to_dict() if eng.running else None,
+                "running": eng.running.to_dict() if (eng.running and eng.running.ticks > 0) else None,
                 "seconds_left": eng.seconds_left,
             })
             asyncio.get_event_loop().create_task(self._broadcast_status())
             log.info("merged %d server candles for %s (engine now holds %d)",
                      changed, pair, len(eng.candles))
+
+    async def refresh_history(self, pair: str) -> Dict:
+        """Re-request server history for a pair (pair switch / manual resync).
+
+        Live feed: chart_notification/get -> history/list/v2 with ~198
+        server-computed candles; DemoFeed: simulated equivalent. The arriving
+        payload seeds the engine and is broadcast to every browser, so the
+        chart for this pair refills with authoritative candles immediately."""
+        if self.feed is None:
+            return {"pair": pair, "candles": [], "running": None,
+                    "seconds_left": 60, "micro": {}, "price": None}
+        try:
+            await self.feed.request_history(pair)
+        except Exception as e:
+            log.warning("refresh_history %s failed: %s", pair, e)
+        # _on_history callback seeds the engine + broadcasts async; give the
+        # loop one beat so the broadcast lands before we answer REST callers
+        await asyncio.sleep(0)
+        return await self.candles_payload(pair, 200)
 
     async def _persist_engine_candles(self, pair: str, eng):
         """Persist the engine's closed candles to SQLite (REPLACE by minute)."""
@@ -238,8 +284,9 @@ class AppCore:
                 "body_ratio": round(run.body_ratio, 2) if run and run.ticks > 3 else None,
                 "candles": len(eng.candles) if eng else 0,
                 "payout": st.get("payouts", {}).get(p),
+                "tps": self._tps(p),
             })
-        await self.hub.broadcast({
+        self.hub.broadcast({
             "type": "status",
             "feed": self.feed_kind,
             "connected": st.get("connected", False),
@@ -253,6 +300,7 @@ class AppCore:
             "pairs": pairs_info,
             "uptime": int(time.time() - self.started_at),
             "pending": {p: s.to_dict() for p, s in self.tracker.pending.items()},
+            "ts": round(time.time(), 3),
         })
 
     async def _persister(self):
@@ -295,12 +343,13 @@ class AppCore:
             for c in eng.candles[-limit:]:
                 by_minute[c.minute] = c.to_dict()
         closed = [by_minute[mn] for mn in sorted(by_minute)][-limit:]
-        running = eng.running.to_dict() if eng and eng.running else None
+        running = eng.running.to_dict() if (eng and eng.running and eng.running.ticks > 0) else None
         return {
             "pair": pair, "candles": closed, "running": running,
             "seconds_left": eng.seconds_left if eng else 60,
             "micro": eng.micro_snapshot() if eng else {},
             "price": self.price.get(pair),
+            "tps": self._tps(pair),
         }
 
 

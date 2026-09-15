@@ -68,7 +68,11 @@
       <div class="panel chart-panel">
         <div class="chart-top">
           <div class="pair-tabs" id="pair-tabs"></div>
-          <div class="ohlc" id="ohlc-panel">O — H — L — C —</div>
+          <div class="chart-meta">
+            <span class="tick-badge low" id="tick-badge">— tick/s</span>
+            <span class="lat-badge" id="lat-badge">—</span>
+            <div class="ohlc" id="ohlc-panel">O — H — L — C —</div>
+          </div>
         </div>
         <div class="chart-wrap">
           <div id="tvchart"></div>
@@ -244,8 +248,8 @@
 </div>
 
 <script src="/static/js/vendor/lightweight-charts.standalone.production.js"></script>
-<script src="/static/js/chart.js?v=4"></script>
-<script src="/static/js/views.js?v=4"></script>
-<script src="/static/js/app.js?v=4"></script>
+<script src="/static/js/chart.js?v=5"></script>
+<script src="/static/js/views.js?v=5"></script>
+<script src="/static/js/app.js?v=5"></script>
 </body>
 </html>

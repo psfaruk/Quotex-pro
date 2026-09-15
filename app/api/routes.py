@@ -48,6 +48,18 @@ async def candles(pair: str, limit: int = 120):
     return await core.candles_payload(pair, limit)
 
 
+@router.get("/history/{pair}")
+async def refresh_history(pair: str):
+    """Re-pull authoritative server candles for a pair (pair-switch resync).
+
+    Triggers feed.request_history -> engine seed -> 'history' broadcast to
+    every connected browser, and also returns the merged payload directly
+    (DB history + live engine memory + running candle)."""
+    if pair not in KNOWN_PAIRS and pair not in core.engines:
+        raise HTTPException(404, "unknown pair")
+    return await core.refresh_history(pair)
+
+
 @router.get("/signals")
 async def signals(window: str = "1h", pair: Optional[str] = None,
                   direction: Optional[str] = None, result: Optional[str] = None,

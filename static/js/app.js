@@ -23,6 +23,10 @@
   let chart = null;
   let ws = null;
   let wsRetry = 1000;
+  let loadSeq = 0;               // stale-response guard for pair switches
+
+  // diagnostics (also used by automated tests): messages received + rate
+  window.__qxStats = { msgs: 0, first: performance.now(), errors: 0 };
 
   // ------------------------------------------------------------ websocket
   function connectWS() {
@@ -30,12 +34,17 @@
     ws = new WebSocket(`${proto}://${location.host}/api/ws`);
     ws.onopen = () => { wsRetry = 1000; };
     ws.onmessage = (ev) => {
+      window.__qxStats.msgs++;
       let m; try { m = JSON.parse(ev.data); } catch (e) { return; }
-      handle(m);
+      // one malformed message must NEVER kill the update loop
+      try { handle(m); } catch (e) {
+        window.__qxStats.errors++;
+        console.warn('[ws]', e && e.message, m && m.type);
+      }
     };
     ws.onclose = () => {
       setTimeout(connectWS, wsRetry);
-      wsRetry = Math.min(wsRetry * 1.6, 8000);
+      wsRetry = Math.min(wsRetry * 1.6, 3000);
     };
     ws.onerror = () => { try { ws.close(); } catch (e) {} };
   }
@@ -57,22 +66,29 @@
         break;
       }
       case 'candle_update': {
-        state.running[m.pair] = m.candle;
+        if (m.candle) state.running[m.pair] = m.candle;
         state.micro[m.pair] = m.micro || {};
+        // live price for home cards — patched per tick, no full re-render
+        patchHomePrice(m.pair, m.price != null ? m.price : (m.candle && m.candle.close),
+                       m.candle ? Math.sign(m.candle.close - m.candle.open) : 0);
         if (m.pair === state.activePair) {
           state.secondsLeft = m.seconds_left;
           // per-tick update of the running candle: the chart price equals the
           // actual Quotex tick (no smoothing) and redraws at display frame rate
-          if (chart) chart.setRunning(m.candle, m.seconds_left);
+          if (chart) chart.setRunning(m.pair, m.candle, m.seconds_left);
           updateMicro(m.micro || {});
+          updateBadges(m.tps, m.ts);
         }
         break;
       }
       case 'history': {
         state.candles[m.pair] = m.candles || [];
-        state.running[m.pair] = m.running || state.running[m.pair] || null;
+        if (m.running) state.running[m.pair] = m.running;
         state.mini[m.pair] = (m.candles || []).slice(-14).map(c => Math.sign(c.close - c.open));
-        if (m.pair === state.activePair) drawChart();
+        if (m.pair === state.activePair) {
+          drawChart();
+          updateBadges(m.tps, m.ts);
+        }
         break;
       }
       case 'analysis': {
@@ -172,8 +188,35 @@
       minute: s.minute - 60, dir: s.direction, result: s.result,
     }));
     chart.setMarks(marks);
-    chart.setData(candles, running, state.secondsLeft);
+    chart.setData(pair, candles, running, state.secondsLeft);
     chart.setEntry(pend ? pend.entry : null);
+  }
+
+  // tick-rate + feed-latency badges in the chart header
+  function updateBadges(tps, ts) {
+    const tb = $('tick-badge'), lb = $('lat-badge');
+    if (tps != null && tb) {
+      tb.textContent = `${tps} tick/s`;
+      tb.className = 'tick-badge ' + (tps >= 8 ? 'ok' : tps >= 4 ? 'mid' : 'low');
+    }
+    if (ts && lb) {
+      const ms = Math.round((Date.now() / 1000 - ts) * 1000);
+      lb.textContent = (ms >= 0 && ms < 5000) ? `${ms}ms` : '—';
+    }
+  }
+
+  // per-tick price patch on home pair cards (no full re-render -> 60fps feel)
+  function patchHomePrice(pair, price, dir) {
+    if (state._tab !== 'home' || price == null) return;
+    const card = document.querySelector(`.pair-card[data-pair="${CSS.escape(pair)}"]`);
+    if (!card) return;
+    const pe = card.querySelector('.pc-price');
+    if (pe && isFinite(price)) pe.textContent = fmtPrice(price);
+    const de = card.querySelector('.pc-dir');
+    if (de) {
+      de.className = `pc-dir ${dir > 0 ? 'up' : dir < 0 ? 'dn' : 'flat'}`;
+      de.textContent = dir > 0 ? '▲' : dir < 0 ? '▼' : '•';
+    }
   }
 
   function updateMicro(micro) {
@@ -195,15 +238,24 @@
   async function loadCandles() {
     const pair = state.activePair;
     if (!pair) return;
+    const seq = ++loadSeq;
     try {
       const d = await api(`/api/candles/${encodeURIComponent(pair)}?limit=200`);
+      if (seq !== loadSeq || pair !== state.activePair) return;  // stale guard
       state.candles[pair] = d.candles || [];
       state.running[pair] = d.running;
       state.micro[pair] = d.micro || {};
       state.secondsLeft = d.seconds_left || 60;
       drawChart();
       updateMicro(d.micro || {});
+      updateBadges(d.tps, null);
     } catch (e) { /* ignore */ }
+  }
+
+  async function refreshHistory(pair) {
+    // server re-pulls authoritative Quotex candles for this pair and
+    // broadcasts them; guarantees the chart opens full on every switch
+    try { await api(`/api/history/${encodeURIComponent(pair)}`); } catch (e) { /* ignore */ }
   }
 
   async function loadHistory() {
@@ -269,10 +321,13 @@
   window.App = { goTab, selectPair };
 
   function selectPair(pair) {
+    if (!pair || pair === state.activePair) { if (pair) goTab('signals'); return; }
     state.activePair = pair;
     Views.renderPairTabs(state);
-    if (chart) chart.resetView();
-    loadCandles();
+    if (chart) { chart.setPair(pair); chart.resetView(); }
+    drawChart();                        // instant redraw from cached state
+    loadCandles();                      // then REST refresh
+    refreshHistory(pair);               // + authoritative server candles
     if (state._tab !== 'signals') goTab('signals');
   }
   // ------------------------------------------------------------ settings
