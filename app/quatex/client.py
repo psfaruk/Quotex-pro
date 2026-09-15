@@ -310,7 +310,7 @@ class DemoFeed:
     whole app (candles, signals, stats, chart) stays demonstrable offline.
     Clearly labeled feed='demo' in the UI."""
 
-    TICK_HZ = 4.0
+    TICK_HZ = 10.0   # match the live Quotex feel (~8-12 ticks/sec per pair)
 
     def __init__(self, pairs: List[str]):
         self.pairs = pairs

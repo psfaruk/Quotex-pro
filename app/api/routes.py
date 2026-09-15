@@ -45,7 +45,7 @@ async def status():
 async def candles(pair: str, limit: int = 120):
     if limit < 10 or limit > 400:
         limit = 120
-    return core.candles_payload(pair, limit)
+    return await core.candles_payload(pair, limit)
 
 
 @router.get("/signals")

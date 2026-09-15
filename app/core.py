@@ -128,15 +128,17 @@ class AppCore:
         eng.add_tick(price, ts)
 
     def _on_candle_update(self, pair: str, candle, seconds_left: float):
-        # throttle broadcasts: every tick is too chatty for browsers
+        # near-real-time: forward every tick to browsers (Quotex delivers
+        # ~7-12 ticks/sec per pair). 40ms floor only guards against micro-bursts
+        # so the browser sees a smooth ~10-25 updates/sec per pair.
         now = time.time()
-        last = getattr(self, "_last_upd", {}).get(pair, 0)
-        if now - last < 0.7 and seconds_left > 3:
+        last = getattr(self, "_last_upd", {}).get(pair, 0.0)
+        if now - last < 0.04:
             return
         getattr(self, "_last_upd", {})[pair] = now
         self.hub.broadcast_nowait({
             "type": "candle_update", "pair": pair,
-            "candle": candle.to_dict(), "seconds_left": int(seconds_left),
+            "candle": candle.to_dict(), "seconds_left": round(max(0.0, seconds_left), 2),
             "price": self.price.get(pair),
             "micro": self.engines[pair].micro_snapshot(),
         })
@@ -221,9 +223,32 @@ class AppCore:
                 log.warning("persister error: %s", e)
 
     # -------------------------------------------------------------- queries
-    def candles_payload(self, pair: str, limit: int = 120) -> Dict:
+    async def candles_payload(self, pair: str, limit: int = 120) -> Dict:
+        """Closed candles for a pair: DB history merged with live engine memory.
+
+        The engine only keeps candles accumulated since boot (plus a short
+        history seed); the DB holds everything ever persisted. Merging both
+        means switching pairs always shows the full available history,
+        immediately, together with the live running candle."""
         eng = self.engines.get(pair)
-        closed = [c.to_dict() for c in (eng.candles[-limit:] if eng else [])]
+        by_minute: Dict[int, Dict] = {}
+        # 1) persisted history (older runs / earlier candles)
+        try:
+            for r in await db.load_candles(pair, limit):
+                by_minute[int(r["minute"])] = {
+                    "minute": int(r["minute"]), "pair": pair,
+                    "open": r["open"], "high": r["high"], "low": r["low"],
+                    "close": r["close"], "ticks": r["ticks"],
+                    "up": r["up"], "down": r["down"],
+                    "l10u": r["l10u"], "l10d": r["l10d"],
+                }
+        except Exception as e:
+            log.warning("load_candles(%s) failed: %s", pair, e)
+        # 2) live engine candles are authoritative for their minutes
+        if eng:
+            for c in eng.candles[-limit:]:
+                by_minute[c.minute] = c.to_dict()
+        closed = [by_minute[mn] for mn in sorted(by_minute)][-limit:]
         running = eng.running.to_dict() if eng and eng.running else None
         return {
             "pair": pair, "candles": closed, "running": running,

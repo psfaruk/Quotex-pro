@@ -108,7 +108,7 @@ body{
 .micro-label{font-size:11.5px;color:var(--dim);white-space:nowrap}
 .meter{flex:1;height:8px;background:linear-gradient(90deg,var(--red),var(--line) 50%,var(--green));border-radius:5px;position:relative}
 .meter-zero{position:absolute;left:50%;top:-2px;bottom:-2px;width:2px;background:var(--dim2)}
-.meter-fill{position:absolute;top:-4px;width:3px;height:16px;background:#fff;border-radius:2px;left:50%;transition:left .25s;box-shadow:0 0 6px #fff}
+.meter-fill{position:absolute;top:-4px;width:3px;height:16px;background:#fff;border-radius:2px;left:50%;transition:left .18s linear;box-shadow:0 0 6px #fff}
 .micro-val{font-family:'Inter',monospace;font-size:12px;width:52px;text-align:right}
 .flip-badge{background:rgba(255,91,110,.15);color:var(--red);border:1px solid var(--red);font-size:11px;padding:2px 8px;border-radius:6px;font-weight:700}
 .factor-list{display:flex;flex-direction:column;gap:7px;max-height:340px;overflow-y:auto}

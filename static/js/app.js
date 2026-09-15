@@ -61,7 +61,8 @@
         state.micro[m.pair] = m.micro || {};
         if (m.pair === state.activePair) {
           state.secondsLeft = m.seconds_left;
-          drawChart();
+          // lightweight per-tick update: chart interpolates at 60fps internally
+          if (chart) chart.setRunning(m.candle, m.seconds_left);
           updateMicro(m.micro || {});
         }
         break;
@@ -179,9 +180,6 @@
     val.textContent = `${bias > 0 ? '+' : ''}${Math.round(bias * 100)}%`;
     val.style.color = bias > 0.15 ? 'var(--green)' : bias < -0.15 ? 'var(--red)' : 'var(--dim)';
     flip.hidden = !micro.flip_risk;
-    const cd = $('countdown');
-    cd.textContent = `${String(micro.seconds_left || state.secondsLeft).padStart(2, '0')}s`;
-    cd.style.color = (micro.seconds_left || 60) <= 10 ? 'var(--red)' : 'var(--accent)';
   }
 
   // ------------------------------------------------------------ data loads
@@ -270,6 +268,7 @@
   function selectPair(pair) {
     state.activePair = pair;
     Views.renderPairTabs(state);
+    if (chart) chart.resetView();
     loadCandles();
     if (state._tab !== 'signals') goTab('signals');
   }
@@ -394,17 +393,19 @@
   function init() {
     chart = new CandleChart($('chart-canvas'));
     chart.onOhlc = (label) => { $('ohlc-panel').textContent = label; };
+    chart.start();   // 60fps render loop (idles when chart is off-screen)
     document.querySelectorAll('.tab-btn').forEach(b => b.onclick = () => goTab(b.dataset.tab));
 
-    // countdown ticker (client-side, 100ms)
-    setInterval(() => {
-      state.secondsLeft = Math.max(0, state.secondsLeft - 0.1);
+    // 60fps UI ticker: countdown text driven by wall-clock (server-synced),
+    // never drifts, updates every frame like a video
+    const uiLoop = () => {
+      const s = chart ? chart.getSecondsLeft() : 60;
       const cd = $('countdown');
-      const s = Math.ceil(state.secondsLeft);
-      cd.textContent = `${String(s).padStart(2, '0')}s`;
+      cd.textContent = `${String(Math.max(0, Math.ceil(s))).padStart(2, '0')}s`;
       cd.style.color = s <= 10 ? 'var(--red)' : 'var(--accent)';
-      if (chart && chart.running) chart.draw();
-    }, 250);
+      requestAnimationFrame(uiLoop);
+    };
+    requestAnimationFrame(uiLoop);
 
     bindSettings();
     connectWS();
