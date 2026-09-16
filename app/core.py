@@ -29,6 +29,7 @@ class AppCore:
         self.feed_status: Dict = {}
         self.price: Dict[str, float] = {}
         self._persist_task = None
+        self._resync_task = None
         # tick-rate telemetry: per-pair timestamp log (rolling ~15s window)
         self._ticklog: Dict[str, deque] = {}
         self._tps_cache: Dict[str, float] = {}          # pair -> cached t/s
@@ -44,17 +45,19 @@ class AppCore:
         self.hub.on_attach = self._broadcast_status
         await self.tracker.restore_pending()
         self._persist_task = asyncio.create_task(self._persister())
+        self._resync_task = asyncio.create_task(self._resync_loop())
         await self._start_feed()
 
     async def stop(self):
         if self.feed:
             await self.feed.stop()
-        if self._persist_task:
-            self._persist_task.cancel()
-            try:
-                await self._persist_task
-            except (asyncio.CancelledError, Exception):
-                pass
+        for t in (self._persist_task, self._resync_task):
+            if t:
+                t.cancel()
+                try:
+                    await t
+                except (asyncio.CancelledError, Exception):
+                    pass
         await self.hub.stop()
 
     async def _start_feed(self):
@@ -125,6 +128,35 @@ class AppCore:
         await self._broadcast_status()
         return self.settings.masked()
 
+    async def _resync_loop(self):
+        """Continuously re-pull server candles for every pair.
+
+        The Quotex terminal's chart is fed by server-computed candles for
+        history and by the live tick stream for the current minutes. Our
+        periodic resync replicates that: every ~45s per pair (staggered) the
+        authoritative history/list/v2 payload re-merges into the engine,
+        which (a) heals any tick the live stream missed (H/L/close),
+        (b) re-persists corrected candles for backtests, and (c) rebroadcasts
+        the chart so browsers stay 1:1 with the broker terminal."""
+        await asyncio.sleep(20)               # let the feed settle first
+        while True:
+            try:
+                pairs = list(self.settings.pairs)
+                for p in pairs:
+                    if self.feed is None:
+                        break
+                    try:
+                        await self.feed.request_history(p)
+                    except Exception as e:
+                        log.debug("resync %s failed: %s", p, e)
+                    await asyncio.sleep(9)    # stagger pairs inside the cycle
+                await asyncio.sleep(45)
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                log.warning("resync loop error: %s", e)
+                await asyncio.sleep(30)
+
     # -------------------------------------------------------------- engine
     def _ensure_engine(self, pair: str) -> CandleEngine:
         if pair not in self.engines:
@@ -193,12 +225,15 @@ class AppCore:
             self.signal_engine.on_candle_close(pair, closed, history))
 
     def _on_history(self, pair: str, data):
-        """history/list/v2 payload arrived (server re-pushes on refresh).
+        """history/list/v2 payload arrived (boot / pair switch / periodic
+        resync — the server also re-pushes it spontaneously).
 
         The payload carries BOTH:
           * "candles": server-computed M1 OHLC rows (~198 candles) — the exact
-            data the Quotex terminal draws. Preferred: guaranteed 1:1 match
-            with the broker chart + instant full history on chart open.
+            data the Quotex terminal draws for history. Merged with
+            completeness rules: only rows whose snapshot ran to the end of
+            their minute are authoritative; trailing stale mid-minute
+            snapshots never overwrite live-collected candles.
           * "history": raw ticks (~500s) — legacy fallback when the server
             variant sends no candle rows (aggregated locally instead)."""
         eng = self.engines.get(pair)
@@ -206,18 +241,33 @@ class AppCore:
             return
         rows = data.get("candles") or []
         ticks = data.get("history") or []
+        # server-clock evidence inside this payload: newest tick timestamp
+        now_hint = 0.0
+        if ticks:
+            try:
+                now_hint = float(ticks[-1][0])
+            except (ValueError, TypeError, IndexError):
+                pass
         changed = 0
+        corrections = []
         if rows:
             try:
-                changed = eng.seed_server_candles(rows)
+                res = eng.seed_server_candles(rows, now_hint=now_hint)
+                changed = res["changed"]
+                corrections = res.get("corrections") or []
             except Exception as e:
                 log.warning("server-candle seed %s failed: %s", pair, e)
             if changed:
                 # persist authoritative history immediately (backtest + instant
                 # pair-switch restore from DB on next boot)
                 asyncio.get_event_loop().create_task(self._persist_engine_candles(pair, eng))
+            if corrections:
+                # server corrected a closed candle's close -> re-settle any
+                # signal decided on the stale value (WIN/LOSS may flip)
+                asyncio.get_event_loop().create_task(
+                    self.tracker.reconcile(pair, corrections))
         elif ticks and len(eng.candles) < 3:
-            # legacy fallback: build ~8 candles locally from raw ticks
+            # legacy fallback: build candles locally from raw ticks
             try:
                 eng.seed_history(ticks)
                 changed = 1
@@ -231,8 +281,9 @@ class AppCore:
                 "seconds_left": eng.seconds_left,
             })
             asyncio.get_event_loop().create_task(self._broadcast_status())
-            log.info("merged %d server candles for %s (engine now holds %d)",
-                     changed, pair, len(eng.candles))
+            log.info("merged %d server candles for %s (engine now holds %d%s)",
+                     changed, pair, len(eng.candles),
+                     f", {len(corrections)} corrected" if corrections else "")
 
     async def refresh_history(self, pair: str) -> Dict:
         """Re-request server history for a pair (pair switch / manual resync).

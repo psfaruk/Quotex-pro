@@ -29,9 +29,10 @@ class Candle:
     last10_down: int = 0
     high_ts: float = 0.0       # when high was made (sec into candle)
     low_ts: float = 0.0        # when low was made
+    last_ts: float = 0.0       # absolute unix ts of the LAST tick (freshness)
     closed: bool = False
 
-    def add_tick(self, price: float, sec_into: float):
+    def add_tick(self, price: float, sec_into: float, abs_ts: float = 0.0):
         if self.ticks == 0:
             self.open = self.close = price
             self.high = self.low = price
@@ -53,6 +54,8 @@ class Candle:
                     self.last10_down += 1
         self.close = price
         self.ticks += 1
+        if abs_ts:
+            self.last_ts = abs_ts
 
     @property
     def range(self) -> float:

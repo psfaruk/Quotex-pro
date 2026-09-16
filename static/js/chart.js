@@ -24,6 +24,12 @@
   const GREEN = '#00c896', RED = '#ff5b6e', ACCENT = '#ffb020';
   const GLIDE_MS = 130;          // visual glide between ticks (same candle)
 
+  // Quotex terminal shows candle times in the viewer's LOCAL timezone.
+  // LWC formats timestamps as UTC, so shift every bar/marker time by the
+  // local UTC offset — a uniform shift keeps candle spacing/patterns
+  // identical while the time axis matches the broker terminal exactly.
+  const TZ = -new Date().getTimezoneOffset() * 60;   // seconds to add to UTC
+
   const num = (v) => (v != null && isFinite(v) ? +v : null);
 
   function toBar(c) {
@@ -33,7 +39,7 @@
     let high = num(c.high != null ? c.high : c.h);
     let low = num(c.low != null ? c.low : c.l);
     let close = num(c.close != null ? c.close : c.c);
-    const t = +time;
+    const t = +time + TZ;   // local-time axis like the Quotex terminal
     if (open == null || high == null || low == null || close == null ||
         !isFinite(t) || t <= 0) return null;
     // sanitize: clamp H/L around O/C (guards against placeholder candles
@@ -198,6 +204,12 @@
       if (r) seen.set(r.time, r);                   // running candle wins over closed dup
       seen.forEach((b) => bars.push(b));
       bars.sort((a, b) => a.time - b.time);
+      // preserve the user's zoom/scroll across periodic resync reloads
+      // (pair switches start from an empty chart -> no restore -> fitContent)
+      let keepRange = null;
+      if (this._bars.length) {
+        keepRange = this._safe(() => this.chart.timeScale().getVisibleLogicalRange()) || null;
+      }
       this._bars = bars;
       this._anim = null;                            // full reload cancels gliding
       this._running = r ? {
@@ -207,6 +219,9 @@
       this._applyPrecision(r ? r.close : (bars.length ? bars[bars.length - 1].close : null));
       this._safe(() => this.series.setData(bars));
       this._safe(() => this.series.setMarkers(this._markers));
+      if (keepRange) {
+        this._safe(() => this.chart.timeScale().setVisibleLogicalRange(keepRange));
+      }
       if (secondsLeft != null && isFinite(secondsLeft)) this._syncSl(secondsLeft);
       if (!this._crosshair) this._emitOhlc(this._running);
     }
@@ -269,7 +284,7 @@
 
     setMarks(marks) {
       this._markers = (marks || []).map((m) => ({
-        time: +m.minute,
+        time: +m.minute + TZ,    // same local-time shift as the bars
         position: m.dir === 'CALL' ? 'belowBar' : 'aboveBar',
         color: m.result === 'WIN' ? GREEN : (m.result === 'LOSS' ? RED : ACCENT),
         shape: m.dir === 'CALL' ? 'arrowUp' : 'arrowDown',
